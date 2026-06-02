@@ -1,0 +1,55 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>流式输出演示</title>
+</head>
+<body>
+    <div>
+        <input type="text" id="prompt" placeholder="输入问题" value="讲一个笑话">
+        <button id="sendBtn">发送</button>
+    </div>
+    <div id="output" style="border:1px solid #ccc; padding:10px; margin-top:20px; min-height:100px;"></div>
+
+    <script>
+        const outputDiv = document.getElementById('output');
+        const sendBtn = document.getElementById('sendBtn');
+        const promptInput = document.getElementById('prompt');
+/*
+        async function streamChat() {
+            const prompt = promptInput.value;
+            if (!prompt) return;
+            
+            outputDiv.innerText = '';  // 清空上次内容
+            const url = `/api/streamingResponse?prompt=${encodeURIComponent(prompt)}`;
+            
+            try {
+                const response = await fetch(url);
+                console.log(response)
+                if (!response.ok) throw new Error('请求失败');
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value);
+                    outputDiv.innerText += chunk;  // 追加显示
+                }
+            } catch (error) {
+                console.error('流式错误:', error);
+                outputDiv.innerText = '发生错误：' + error.message;
+            }
+        }
+        
+        sendBtn.addEventListener('click', streamChat);*/
+
+        const source = new EventSource(`/api/eventSourceResponse?prompt=hello`);
+        source.onmessage = (event) => {
+            outputDiv.innerText += event.data + '\n';
+        };
+        source.onerror = () => source.close();
+    </script>
+</body>
+</html>

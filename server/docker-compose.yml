@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: employee_agent_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: employee_agent
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: app_password
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    networks:
+      - employee_agent_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: employee_agent_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - employee_agent_network
+
+  app:
+    build: .
+    container_name: employee_agent_app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: app_user
+      DB_PASSWORD: app_password
+      DB_DATABASE: employee_agent
+      LLM_PROVIDER: qwen
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY}
+      OPEN_API_KEY: ${OPEN_API_KEY}
+      OPEN_MODEL: qwen-plus
+      OPEN_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - employee_agent_network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  employee_agent_network:
+    driver: bridge
