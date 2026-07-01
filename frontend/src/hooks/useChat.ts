@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
-import { query as apiQuery } from '../api/client';
+import { useCallback, useRef } from 'react';
+import { streamQuery } from '../api/client';
+import { useChatStore } from '../stores/chatStore';
 
 export interface ChatMessage {
   id: string;
@@ -9,59 +10,63 @@ export interface ChatMessage {
 }
 
 export function useChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [sessionId, setSessionId] = useState<string | undefined>();
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const messages = useChatStore((state) => state.messages);
+  const sessionId = useChatStore((state) => state.sessionId);
+  const isLoading = useChatStore((state) => state.isLoading);
+  const error = useChatStore((state) => state.error);
+
+  const addUserMessage = useChatStore((state) => state.addUserMessage);
+  const addAssistantMessage = useChatStore((state) => state.addAssistantMessage);
+  const appendMessageContent = useChatStore((state) => state.appendMessageContent);
+  const updateMessageContent = useChatStore((state) => state.updateMessageContent);
+  const setSessionId = useChatStore((state) => state.setSessionId);
+  const setLoading = useChatStore((state) => state.setLoading);
+  const setError = useChatStore((state) => state.setError);
+  const clearChat = useChatStore((state) => state.clearChat);
+
+  const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
     async (question: string) => {
-      const userMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: question,
-        timestamp: Date.now(),
-      };
+      abortRef.current?.abort();
 
-      setMessages((prev) => [...prev, userMsg]);
-      setIsLoading(true);
+      addUserMessage(question);
+      const assistantMsg = addAssistantMessage();
+
+      setLoading(true);
       setError(null);
 
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       try {
-        const res = await apiQuery({ question, sessionId });
-
-        const assistantMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: res.data.result?.answer || res.data.message || '查询完成',
-          timestamp: Date.now(),
-        };
-
-        setSessionId(res.data.sessionId);
-        setMessages((prev) => [...prev, assistantMsg]);
+        for await (const chunk of streamQuery(question, sessionId, controller.signal)) {
+          if (chunk.text) {
+            appendMessageContent(assistantMsg.id, chunk.text);
+          }
+          if (chunk.sessionId) {
+            setSessionId(chunk.sessionId);
+          }
+        }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : '未知错误';
-        setError(msg);
-
-        const errorMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: `❌ ${msg}`,
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, errorMsg]);
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          updateMessageContent(assistantMsg.id, '已取消');
+        } else {
+          const msg = err instanceof Error ? err.message : '未知错误';
+          setError(msg);
+          updateMessageContent(assistantMsg.id, `❌ ${msg}`);
+        }
       } finally {
-        setIsLoading(false);
+        setLoading(false);
+        abortRef.current = null;
       }
     },
-    [sessionId]
+    [sessionId, addUserMessage, addAssistantMessage, appendMessageContent, updateMessageContent, setSessionId, setLoading, setError]
   );
 
-  const clearChat = useCallback(() => {
-    setMessages([]);
-    setSessionId(undefined);
-    setError(null);
+  const stopMessage = useCallback(() => {
+    abortRef.current?.abort();
   }, []);
 
-  return { messages, sessionId, isLoading, error, sendMessage, clearChat };
+  return { messages, sessionId, isLoading, error, sendMessage, stopMessage, clearChat };
 }

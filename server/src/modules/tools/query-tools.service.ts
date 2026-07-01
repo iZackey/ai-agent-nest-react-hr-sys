@@ -74,4 +74,17 @@ export class QueryToolsService {
       return JSON.stringify({ success: false, data: null, message: `搜索失败: ${e.message}` });
     }
   }
+
+  async findEmployeesByNames(names: string[]): Promise<{ id: number; name: string }[]> {
+    if (!names || names.length === 0) return [];
+
+    const employees = await this.employeeRepo
+      .createQueryBuilder('e')
+      .select(['e.id', 'e.name'])
+      .where('e.name IN (:...names)', { names })
+      .getMany();
+
+    this.logger.log(`根据姓名查找员工 - 姓名: ${names.join(', ')}, 结果: ${employees.length}条`);
+    return employees;
+  }
 }

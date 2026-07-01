@@ -4,6 +4,7 @@ import {
   evaluateCommunication,
   evaluateLeadership,
   rank,
+  findEmployeesByNames,
 } from '../api/client';
 
 type EvalType = 'technical' | 'communication' | 'leadership' | 'rank';
@@ -16,7 +17,7 @@ const evalTypes: { value: EvalType; label: string; icon: string }[] = [
 ];
 
 export default function EvaluatePage() {
-  const [idsInput, setIdsInput] = useState('');
+  const [namesInput, setNamesInput] = useState('');
   const [evalType, setEvalType] = useState<EvalType>('technical');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<unknown>(null);
@@ -29,19 +30,17 @@ export default function EvaluatePage() {
     leadership: 0.3,
   });
 
-  const parseIds = (): number[] => {
-    return idsInput
+  const parseNames = (): string[] => {
+    return namesInput
       .split(/[,，\s]+/)
       .map((s) => s.trim())
-      .filter(Boolean)
-      .map(Number)
-      .filter((n) => !isNaN(n));
+      .filter(Boolean);
   };
 
   const handleSubmit = async () => {
-    const ids = parseIds();
-    if (ids.length === 0) {
-      setError('请输入有效的员工 ID');
+    const names = parseNames();
+    if (names.length === 0) {
+      setError('请输入有效的员工姓名');
       return;
     }
 
@@ -50,16 +49,37 @@ export default function EvaluatePage() {
     setResult(null);
 
     try {
-      let res;
+      // 先根据姓名查找员工ID
+      const empRes = await findEmployeesByNames(names);
+      const employees = empRes.data.employees;
+
+      if (employees.length === 0) {
+        setError('未找到匹配的员工，请检查姓名是否正确');
+        setLoading(false);
+        return;
+      }
+
+      // 检查未找到的员工
+      const foundNames = employees.map((e) => e.name);
+      const notFound = names.filter((n) => !foundNames.includes(n));
+      if (notFound.length > 0) {
+        setError(`未找到以下员工: ${notFound.join(', ')}`);
+        setLoading(false);
+        return;
+      }
+
+      const ids = employees.map((e) => e.id);
+
+      let resData: any;
       switch (evalType) {
         case 'technical':
-          res = await evaluateTechnical({ employeeIds: ids });
+          resData = (await evaluateTechnical({ employeeIds: ids })).data;
           break;
         case 'communication':
-          res = await evaluateCommunication({ employeeIds: ids });
+          resData = (await evaluateCommunication({ employeeIds: ids })).data;
           break;
         case 'leadership':
-          res = await evaluateLeadership({ employeeIds: ids });
+          resData = (await evaluateLeadership({ employeeIds: ids })).data;
           break;
         case 'rank': {
           const total =
@@ -69,11 +89,11 @@ export default function EvaluatePage() {
             setLoading(false);
             return;
           }
-          res = await rank({ employeeIds: ids, metrics: weights });
+          resData = (await rank({ employeeIds: ids, metrics: weights })).data;
           break;
         }
       }
-      setResult(res.data);
+      setResult({ employees, ...resData });
     } catch (err) {
       setError(err instanceof Error ? err.message : '评估请求失败');
     } finally {
@@ -98,13 +118,13 @@ export default function EvaluatePage() {
 
       <div className="evaluate-card">
         <div className="form-group">
-          <label>员工 ID（逗号分隔）</label>
+          <label>员工姓名（逗号分隔）</label>
           <input
             type="text"
             className="form-input"
-            value={idsInput}
-            onChange={(e) => setIdsInput(e.target.value)}
-            placeholder="例如：1, 2, 3"
+            value={namesInput}
+            onChange={(e) => setNamesInput(e.target.value)}
+            placeholder="例如：张三, 李四, 王五"
           />
         </div>
 

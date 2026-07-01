@@ -95,15 +95,27 @@ export async function query(req: QueryRequest): Promise<ResponseData<QueryRespon
   });
 }
 
-// SSE 流式查询
+export interface StreamChunk {
+  text?: string;
+  done?: boolean;
+  sessionId?: string;
+  error?: string;
+}
+
 export async function* streamQuery(
   prompt: string,
+  sessionId?: string,
   signal?: AbortSignal
-): AsyncGenerator<string> {
-  const response = await fetch(
-    `${BASE_URL}/stream?prompt=${encodeURIComponent(prompt)}`,
-    { signal }
-  );
+): AsyncGenerator<StreamChunk> {
+  const params = new URLSearchParams();
+  params.set('prompt', prompt);
+  if (sessionId) {
+    params.set('sessionId', sessionId);
+  }
+
+  const response = await fetch(`${BASE_URL}/stream?${params.toString()}`, {
+    signal,
+  });
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -128,15 +140,18 @@ export async function* streamQuery(
       if (!trimmed || !trimmed.startsWith('data: ')) continue;
 
       const data = trimmed.slice(6);
-      if (data === '[DONE]') return;
 
       try {
-        const parsed = JSON.parse(data);
-        if (parsed.text) {
-          yield parsed.text;
+        const parsed: StreamChunk = JSON.parse(data);
+        if (parsed.error) {
+          throw new Error(parsed.error);
         }
-      } catch {
-        // 忽略解析失败
+        yield parsed;
+      } catch (err) {
+        if (err instanceof Error && !data.includes('error')) {
+        } else {
+          throw err;
+        }
       }
     }
   }
@@ -206,6 +221,16 @@ export async function rank(
   return request('/rank', {
     method: 'POST',
     body: JSON.stringify(req),
+  });
+}
+
+// 根据姓名查找员工
+export async function findEmployeesByNames(
+  names: string[]
+): Promise<ResponseData<{ employees: { id: number; name: string }[] }>> {
+  return request('/find-employees', {
+    method: 'POST',
+    body: JSON.stringify({ names }),
   });
 }
 

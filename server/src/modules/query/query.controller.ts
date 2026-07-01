@@ -8,6 +8,7 @@ import { EvaluateRequest, RankRequest } from '../../schemas/evaluate.schema';
 import { AgentService } from '../agent/agent.service';
 import { SessionService } from '../session/session.service';
 import { AnalysisToolsService } from '../tools/analysis-tools.service';
+import { QueryToolsService } from '../tools/query-tools.service';
 
 @ApiTags('queries')
 @Controller('api')
@@ -18,6 +19,7 @@ export class QueryController {
     private agentService: AgentService,
     private sessionService: SessionService,
     private analysisTools: AnalysisToolsService,
+    private queryTools: QueryToolsService,
   ) {}
 
   @Post('query')
@@ -125,5 +127,16 @@ export class QueryController {
     const resultJson = await this.analysisTools.rankCandidates(request.employeeIds, request.metrics);
     const parsed = JSON.parse(resultJson);
     return new ResponseData(0, parsed.data || {});
+  }
+
+  @Post('find-employees')
+  @ApiOperation({ summary: '根据姓名查找员工ID' })
+  async findEmployeesByNames(@Body() body: { names: string[] }) {
+    const { names } = body;
+    if (!names || names.length === 0) {
+      return new ResponseData(0, { employees: [] });
+    }
+    const employees = await this.queryTools.findEmployeesByNames(names);
+    return new ResponseData(0, { employees });
   }
 }

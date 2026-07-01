@@ -20,6 +20,6 @@ import { ToolRegistryService } from './tool-registry.service';
     AnalysisToolsService,
     ToolRegistryService,
   ],
-  exports: [ToolRegistryService, AnalysisToolsService],
+  exports: [ToolRegistryService, AnalysisToolsService, QueryToolsService],
 })
 export class ToolsModule {}

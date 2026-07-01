@@ -1,55 +1,33 @@
-/**
- * 流式响应控制器
- * 提供多种流式输出方式的测试接口，包括 SSE、Observable 等
- */
 import {
   Controller, Get, Post, Query as QueryParam, Req, Res, Sse, Logger,
-} from '@nestjs/common'; // NestJS 控制器装饰器和工具
-import { ApiTags } from '@nestjs/swagger'; // Swagger 标签装饰器
-import { Observable } from 'rxjs'; // RxJS 可观察对象
-import type { Request } from 'express'; // Express 请求类型
-import { ConfigService } from '@nestjs/config'; // 配置服务
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible'; // AI SDK OpenAI 兼容层
-import { streamText, stepCountIs } from 'ai'; // AI SDK 流式文本生成
-import { ResponseData } from '../../common/dto/response.dto'; // 统一响应数据格式
-import { ToolRegistryService } from '../tools/tool-registry.service'; // 工具注册服务
+} from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { Observable } from 'rxjs';
+import type { Request } from 'express';
+import { ConfigService } from '@nestjs/config';
+import { ChatOpenAI } from '@langchain/openai';
+import { createToolCallingAgent, AgentExecutor } from 'langchain/agents';
+import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { ResponseData } from '../../common/dto/response.dto';
+import { ToolRegistryService } from '../tools/tool-registry.service';
+import { SessionService } from '../session/session.service';
 
-/**
- * StreamingController - 流式响应控制器
- * 提供流式输出测试接口
- */
 @ApiTags('test')
 @Controller('api')
 export class StreamingController {
-  private readonly logger = new Logger(StreamingController.name); // 日志实例
+  private readonly logger = new Logger(StreamingController.name);
 
-  /**
-   * 构造函数
-   * @param configService 配置服务
-   * @param toolRegistry 工具注册服务
-   */
   constructor(
     private configService: ConfigService,
     private toolRegistry: ToolRegistryService,
+    private sessionService: SessionService,
   ) {}
 
-  /**
-   * 测试接口
-   * POST /api/test
-   * @param req 请求对象
-   * @returns 测试响应数据
-   */
   @Post('test')
   async test(@Req() req: Request) {
     return new ResponseData(0, { aaa: 111 });
   }
 
-  /**
-   * Observable 流式响应示例
-   * GET /api/streamingResponse
-   * 使用 RxJS Observable 实现逐字输出
-   * @returns Observable<string> - 逐字符输出的字符串流
-   */
   @Get('streamingResponse')
   streamTextDemo(): Observable<string> {
     const words = '你好，这是一个流式输出的示例。我们会逐字显示这段文字，就像打字机一样。';
@@ -58,22 +36,16 @@ export class StreamingController {
     return new Observable((subscriber) => {
       const interval = setInterval(() => {
         if (index < words.length) {
-          subscriber.next(words[index]); // 发送单个字符
+          subscriber.next(words[index]);
           index++;
         } else {
           clearInterval(interval);
-          subscriber.complete(); // 完成流
+          subscriber.complete();
         }
-      }, 50); // 每 50ms 发送一个字符
+      }, 50);
     });
   }
 
-  /**
-   * Server-Sent Events (SSE) 示例
-   * GET /api/eventSourceResponse
-   * 使用 NestJS @Sse 装饰器实现 SSE 流式响应
-   * @returns Observable<MessageEvent> - SSE 消息流
-   */
   @Sse('eventSourceResponse')
   eventSourceDemo(): Observable<MessageEvent> {
     let i = 0;
@@ -88,48 +60,121 @@ export class StreamingController {
           clearInterval(interval);
           subscriber.complete();
         }
-      }, 500); // 每 500ms 发送一条消息
+      }, 500);
     });
   }
 
-  /**
-   * AI 流式响应接口
-   * GET /api/stream?prompt=<prompt>
-   * 调用大模型进行流式文本生成，支持工具调用
-   * @param prompt 用户输入的提示词
-   * @param res Express 响应对象
-   */
   @Get('stream')
-  async stream(@QueryParam('prompt') prompt: string, @Res() res: any) {
-    // 创建 OpenAI 兼容客户端
-    const client = createOpenAICompatible({
-      name: 'llm-provider',
-      apiKey: this.configService.get<string>('OPEN_API_KEY') || '',
-      baseURL: this.configService.get<string>('OPEN_BASE_URL') || 'https://open.bigmodel.cn/api/paas/v4',
-    });
-    // 获取模型实例
-    const model = client(this.configService.get<string>('OPEN_MODEL') || 'glm-4-flash');
+  async stream(
+    @QueryParam('prompt') prompt: string,
+    @Res() res: any,
+    @QueryParam('sessionId') sessionId?: string,
+  ) {
+    const baseURL = this.configService.get<string>('OPEN_BASE_URL') || 'https://open.bigmodel.cn/api/paas/v4';
+    const apiKey = this.configService.get<string>('OPEN_API_KEY') || '';
+    const modelName = this.configService.get<string>('OPEN_MODEL') || 'glm-4-flash';
 
-    // 调用 AI SDK 进行流式文本生成
-    const result = streamText({
-      model,
-      prompt,
-      tools: this.toolRegistry.getVercelTools(), // 注册的工具
-      stopWhen: stepCountIs(6), // 最多执行 6 步
-    });
-
-    // 设置 SSE 响应头
-    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
 
-    // 流式输出每个文本块
-    for await (const textPart of result.textStream) {
-      res.write(`data: ${JSON.stringify({ text: textPart })}\n\n`);
+    try {
+      // 获取或创建会话，并获取历史记录
+      const session = await this.sessionService.getOrCreateSession('default_user', sessionId);
+      const history = await this.sessionService.getConversationHistory(session.id, 10);
+
+      // 构建带历史上下文的 prompt
+      const historyMessages = history.map((msg) => {
+        const role = msg.role === 'user' ? 'human' : 'assistant';
+        return `${role}: ${msg.content}`;
+      }).join('\n\n');
+
+      const contextPrompt = historyMessages
+        ? `以下是之前的对话历史，请结合上下文回答用户的新问题：
+
+${historyMessages}
+
+---
+
+当前用户问题：${prompt}`
+        : prompt;
+
+      const tools = this.toolRegistry.getLangChainTools();
+      const model = new ChatOpenAI({
+        modelName,
+        apiKey,
+        temperature: 0.1,
+        streaming: true,
+        configuration: {
+          baseURL,
+        },
+      });
+
+      const chatPrompt = ChatPromptTemplate.fromMessages([
+        ['system', '你是一个智能员工查询助手，能够帮助用户查询和分析员工信息。如果用户的问题涉及之前对话中的内容，请结合上下文回答。'],
+        ['human', '{input}'],
+        ['placeholder', '{agent_scratchpad}'],
+      ]);
+
+      const agent = createToolCallingAgent({
+        llm: model,
+        tools,
+        prompt: chatPrompt,
+      });
+
+      const executor = new AgentExecutor({
+        agent,
+        tools,
+        maxIterations: 6,
+        verbose: true,
+      });
+
+      const result = await executor.invoke({ input: contextPrompt });
+      const agentAnswer = result.output || '';
+
+      const streamModel = new ChatOpenAI({
+        modelName,
+        apiKey,
+        temperature: 0.1,
+        streaming: true,
+        configuration: {
+          baseURL,
+        },
+      });
+
+      let finalPrompt = contextPrompt;
+      if (agentAnswer && agentAnswer.trim() && !agentAnswer.includes('未找到') && !agentAnswer.includes('没有结果')) {
+        finalPrompt = `基于以下信息回答用户问题：\n\n用户问题：${contextPrompt}\n\n参考信息：${agentAnswer}`;
+      }
+
+      const responsePrompt = ChatPromptTemplate.fromMessages([
+        ['system', '你是一个智能员工查询助手，能够帮助用户查询和分析员工信息。如果用户的问题涉及之前对话中的内容，请结合上下文回答。'],
+        ['human', '{input}'],
+      ]);
+
+      const chain = responsePrompt.pipe(streamModel);
+      const stream = await chain.stream({ input: finalPrompt });
+
+      let fullResponse = '';
+      for await (const chunk of stream) {
+        const content = chunk.content || '';
+        if (content) {
+          fullResponse += content;
+          res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
+        }
+      }
+
+      // 保存对话到会话历史
+      await this.sessionService.saveMessage(session.id, 'user', prompt);
+      await this.sessionService.saveMessage(session.id, 'assistant', fullResponse);
+
+      res.write(`data: ${JSON.stringify({ done: true, sessionId: session.id })}\n\n`);
+      res.end();
+    } catch (error) {
+      this.logger.error(`流式响应错误: ${error}`);
+      res.write(`data: ${JSON.stringify({ error: error instanceof Error ? error.message : '未知错误' })}\n\n`);
+      res.end();
     }
-
-    // 发送结束标记
-    res.write('data: [DONE]\n\n');
-    res.end();
   }
 }

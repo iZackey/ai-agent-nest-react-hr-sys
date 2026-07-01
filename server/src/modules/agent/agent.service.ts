@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { generateText, stepCountIs } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { ChatOpenAI } from '@langchain/openai';
+import { createToolCallingAgent, AgentExecutor } from 'langchain/agents';
+import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { ToolRegistryService } from '../tools/tool-registry.service';
 import { SessionService } from '../session/session.service';
 
@@ -23,12 +25,14 @@ export class AgentService {
     const apiKey = this.configService.get<string>('OPEN_API_KEY') || '';
     const modelName = this.configService.get<string>('OPEN_MODEL') || 'glm-4-flash';
 
-    const client = createOpenAICompatible({
-      name: 'llm-provider',
+    return new ChatOpenAI({
+      modelName,
       apiKey,
-      baseURL,
+      temperature: 0.1,
+      configuration: {
+        baseURL,
+      },
     });
-    return client(modelName);
   }
 
   private buildSystemPrompt(): string {
@@ -51,54 +55,60 @@ export class AgentService {
 开始对话。`;
   }
 
+  private buildPrompt() {
+    return ChatPromptTemplate.fromMessages([
+      ['system', this.buildSystemPrompt()],
+      ['placeholder', '{chat_history}'],
+      ['human', '{input}'],
+      ['placeholder', '{agent_scratchpad}'],
+    ]);
+  }
+
   async queryWithAgent(question: string, conversationHistory: any[] = []): Promise<any> {
     try {
       this.logger.log(`Agent处理查询: ${question}`);
 
-      // 构建消息列表
-      const messages: any[] = [];
+      const tools = this.toolRegistry.getLangChainTools();
+      const model = this.getModel();
+      const prompt = this.buildPrompt();
 
-      // 添加对话历史
-      if (conversationHistory) {
-        for (const msg of conversationHistory) {
-          messages.push({
-            role: msg.role,
-            content: msg.content,
-          });
-        }
-      }
+      const chatHistory = conversationHistory.map(msg =>
+        msg.role === 'user'
+          ? new HumanMessage(msg.content)
+          : new AIMessage(msg.content)
+      );
 
-      // 添加当前问题
-      messages.push({
-        role: 'user',
-        content: question,
+      const agent = createToolCallingAgent({
+        llm: model,
+        tools,
+        prompt,
       });
 
-      // 使用 Vercel AI SDK 执行工具调用
-      const result = await generateText({
-        model: this.getModel(),
-        system: this.buildSystemPrompt(),
-        messages,
-        tools: this.toolRegistry.getVercelTools(),
-        stopWhen: stepCountIs(this.maxIterations),
+      const executor = new AgentExecutor({
+        agent,
+        tools,
+        maxIterations: this.maxIterations,
+        verbose: true,
       });
 
-      this.logger.log(`Agent处理完成，使用了 ${result.steps.length} 个步骤`);
+      const result = await executor.invoke({
+        input: question,
+        chat_history: chatHistory,
+      });
+
+      this.logger.log(`Agent处理完成: ${result.output}`);
 
       return {
         success: true,
         data: {
-          answer: result.text,
-          steps: result.steps.length,
-          toolCalls: result.steps
-            .flatMap((s) => s.toolCalls || [])
-            .map((tc) => tc.toolName),
+          answer: result.output,
+          steps: result.steps?.length || 0,
+          toolCalls: result.steps?.flatMap((s: any) => s.toolCalls?.map((tc: any) => tc.toolName) || []) || [],
         },
         message: '查询完成',
       };
-    } catch (e) {
+    } catch (e: any) {
       this.logger.error(`Agent处理失败: ${e.message}`);
-      this.logger.error(`完整错误: ${JSON.stringify(e, Object.getOwnPropertyNames(e))}`);
       return {
         success: false,
         data: null,
