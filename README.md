@@ -51,6 +51,15 @@
 │  │  │         │ │ Tools    │ │ Tools    │ │ Tools   ││      │
 │  │  └─────────┘ └──────────┘ └──────────┘ └─────────┘│      │
 │  └──────────────────────────┬───────────────────────┘      │
+│                             │                              │
+│  ┌──────────────────────────▼──────────────────────────┐    │
+│  │              LangChain.js Agent 核心                 │    │
+│  │  ┌────────────┐ ┌──────────────┐ ┌──────────────┐  │    │
+│  │  │ ChatOpenAI │ │ AgentExecutor │ │DynamicStruc- │  │    │
+│  │  │  (智谱GLM) │ │ createTool-   │ │ turedTool[] │  │    │
+│  │  │            │ │ CallingAgent  │ │              │  │    │
+│  │  └────────────┘ └──────────────┘ └──────────────┘  │    │
+│  └────────────────────────────────────────────────────┘    │
 └─────────────────────────────┼───────────────────────────────┘
                               │
               ┌───────────────┼───────────────┐
@@ -71,7 +80,9 @@
 | TypeORM | ^1.0.0 | ORM 框架 |
 | MySQL2 | ^3.22.4 | 数据库驱动 |
 | Redis (ioredis) | ^5.11.0 | 缓存 |
-| Vercel AI SDK | ^6.0.193 | AI 集成 |
+| LangChain.js | ^0.3.0 | AI Agent 框架（Agent、Chain、Memory） |
+| @langchain/core | ^0.3.0 | 核心抽象（Tool、Prompt、Message） |
+| @langchain/openai | ^0.3.0 | OpenAI 兼容 LLM 接口 |
 | 智谱 GLM-4-Flash | - | 大语言模型 |
 | Swagger | ^11.4.4 | API 文档 |
 | Winston | ^3.19.0 | 日志 |
@@ -145,7 +156,6 @@ npm run dev
 | `DB_USERNAME` | 数据库用户名 | root |
 | `DB_PASSWORD` | 数据库密码 | root |
 | `DB_DATABASE` | 数据库名称 | employee_agent |
-| `LLM_PROVIDER` | LLM 提供商 | zhipu |
 | `OPEN_API_KEY` | 智谱 API Key | - |
 | `OPEN_MODEL` | LLM 模型 | glm-4-flash |
 | `OPEN_BASE_URL` | API 基础地址 | https://open.bigmodel.cn/api/paas/v4 |
